@@ -1,0 +1,97 @@
+import os
+import re
+import asyncio
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from playwright.async_api import async_playwright
+
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+# Masukkan ID Telegram admin/kamu agar bot tidak disalahgunakan orang lain
+ADMIN_ID = int(os.getenv("ADMIN_TELEGRAM_ID", "0"))
+
+# Ganti URL ini sesuai URL pengaturan anggota tim Canva Pro kamu
+CANVA_TEAM_URL = "https://www.canva.com/settings/your-team-id/people"
+
+EMAIL_REGEX = r"^[\w\.-]+@[\w\.-]+\.\w+$"
+
+async def invite_canva_member(email: str) -> bool:
+    async with async_playwright() as p:
+        # Jalankan Chromium headless dengan argument sandbox untuk lingkungan container
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+        )
+        # Muat sesi login yang tersimpan
+        context = await browser.new_context(storage_state="state.json")
+        page = await context.new_page()
+
+        try:
+            # 1. Buka halaman pengaturan anggota tim Canva
+            await page.goto(CANVA_TEAM_URL, wait_until="networkidle", timeout=30000)
+
+            # 2. Klik tombol 'Undang anggota' / 'Invite people'
+            invite_button = page.locator("button:has-text('Invite people'), button:has-text('Undang anggota')").first
+            await invite_button.wait_for(state="visible", timeout=15000)
+            await invite_button.click()
+
+            # 3. Input email ke form
+            email_input = page.locator("input[placeholder*='email' i], input[type='email']").first
+            await email_input.wait_for(state="visible", timeout=10000)
+            await email_input.fill(email)
+
+            # 4. Klik tombol kirim undangan
+            send_button = page.locator("button:has-text('Send invitations'), button:has-text('Kirim undangan')").first
+            await send_button.wait_for(state="enabled", timeout=10000)
+            await send_button.click()
+
+            # Beri jeda sejenak untuk memastikan request terkirim ke server Canva
+            await page.wait_for_timeout(3000)
+            return True
+
+        except Exception as e:
+            print(f"[Error Playwright]: {e}")
+            # Ambil screenshot jika gagal untuk debugging
+            await page.screenshot(path="error.png")
+            return False
+        finally:
+            await browser.close()
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("Akses ditolak.")
+        return
+    await update.message.reply_text(
+        "Kirim email pembeli untuk langsung diundang ke Canva Pro.\nFormat: cukup kirim alamat email saja."
+    )
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    text = update.message.text.strip()
+    
+    if not re.match(EMAIL_REGEX, text):
+        await update.message.reply_text("Format email tidak valid. Pastikan penulisan benar.")
+        return
+
+    status_msg = await update.message.reply_text(f"Memproses undangan untuk: {text}...")
+
+    success = await invite_canva_member(text)
+
+    if success:
+        await status_msg.edit_text(f"Berhasil mengundang {text} ke Canva Pro.")
+    else:
+        await status_msg.edit_text(f"Gagal mengundang {text}. Periksa log atau pastikan sesi login masih valid.")
+        if os.path.exists("error.png"):
+            await update.message.reply_photo(photo=open("error.png", "rb"))
+            os.remove("error.png")
+
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    print("Bot berjalan...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
