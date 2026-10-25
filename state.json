@@ -1,0 +1,1 @@
+playwright codegen --save-storage=state.json https://www.canva.com/login
