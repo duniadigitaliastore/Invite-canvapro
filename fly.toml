@@ -1,0 +1,13 @@
+app = "canva-invite-bot"
+primary_region = "sin" # Singapore (paling dekat dengan latensi rendah)
+
+[build]
+
+[env]
+  PYTHONUNBUFFERED = "1"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 1024 # 1 GB RAM
+  
